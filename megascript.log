@@ -1,0 +1,9 @@
+2026-01-03 11:10:26 PM INFO megascript - __init__: Script started, connecting to OBS...
+2026-01-03 11:10:26 PM INFO baseclient - __init__: Connecting with parameters: host='localhost' port=4455 password='arcane2455' subs=0 timeout=5
+2026-01-03 11:10:26 PM INFO reqs - __init__: Successfully identified ReqClient with the server using RPC version:1
+2026-01-03 11:10:26 PM INFO baseclient - __init__: Connecting with parameters: host='localhost' port=4455 password='arcane2455' subs=2047 timeout=5
+2026-01-03 11:10:26 PM INFO events - __init__: Successfully identified EventClient with the server using RPC version:1
+2026-01-03 11:10:26 PM INFO megascript - __init__: Connected to OBS!
+2026-01-03 11:13:35 PM INFO megascript - switcher: Setting scene to Game Capture.
+2026-01-03 11:13:35 PM INFO megascript - manage_buffer_state: Starting replay buffer.
+2026-01-03 11:13:36 PM INFO megascript - switcher: Setting scene to Alt Tabbed.
