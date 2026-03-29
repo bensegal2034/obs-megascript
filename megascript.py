@@ -64,8 +64,9 @@ class MegaScript:
         self.buffer_timeout = 300
         self.afk_timer = 0
 
-        # absolute path sucks but is annoying to fix
-        self.script_path = Path("C:\\Users\\Ben\\Scripts\\obs-megascript")
+        # solution for getting script running dir stolen from here:
+        # https://stackoverflow.com/a/9350788
+        self.script_path = Path(os.path.dirname(os.path.realpath(__file__)))
 
         self.modified_times = {}
 
@@ -225,9 +226,9 @@ class MegaScript:
 
         if not error:
             self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{names}'.")
-            playsound("D:\\Music\\recordingbeep.mp3")
+            playsound(str(Path.joinpath(self.script_path, "recordingbeep.mp3")))
         else:
-            playsound("D:\\Music\\recordingerror.mp3")
+            playsound(str(Path.joinpath(self.script_path, "recordingerror.mp3")))
     
     def is_fullscreen(self):
         full_screen_rect = (0, 0, self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1))
