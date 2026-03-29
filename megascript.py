@@ -28,6 +28,27 @@ class MegaScript:
             "3:",
             "c:"
         ]
+        self.banned_strings = [
+            "Windows Default Lock Screen",
+            "Windows.UI.Core.CoreWindow",
+            "LockApp.exe",
+            "XamlExplorerHostIslandWindow",
+            "explorer.exe",
+            "Mozilla Firefox",
+            "MozillaWindowClass",
+            "firefox.exe",
+            "obs",
+            "steam",
+            "onecommander",
+            "premiere",
+            "photoshop",
+            "terminal",
+            "cmd",
+            "visual studio",
+            "notepad",
+            "github",
+            "mpv"
+        ]
         self.emote_gen = self.get_emote()
 
         self.user32 = ct.windll.user32
@@ -49,6 +70,7 @@ class MegaScript:
         self.modified_times = {}
 
         self.connected = False
+        self.running = True
 
         logging.basicConfig(
             filename=Path.joinpath(self.script_path, "megascript.log"),
@@ -57,11 +79,21 @@ class MegaScript:
             datefmt='%Y-%m-%d %I:%M:%S %p',
             level=logging.INFO
         )
-        self.logger = logging.getLogger(__name__)
+        logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
+        self.logger = logging.getLogger("obs-megascript")
+        self.logger_last_msg = ""
 
-        self.logger.info("Script started, connecting to OBS...")
+        self.log_info_norepeat("Script started, connecting to OBS...")
         self.establish_connection()
-        self.logger.info("Connected to OBS!")
+        self.log_info_norepeat("Connected to OBS!")
+
+        self.commands_observer = None
+        self.commands_event = None
+
+    def log_info_norepeat(self, msg):
+        if not msg == self.logger_last_msg:
+            self.logger.info(msg)
+        self.logger_last_msg = msg
 
     def establish_connection(self):
         self.obs_connection_timeout = 5
@@ -80,22 +112,66 @@ class MegaScript:
                 # at this point if we haven't thrown an error we're probably chill
                 # set up the event callbacks and set connected to true
                 self.evt.callback.register(self.on_replay_buffer_saved)
+                self.evt.callback.register(self.on_record_state_changed)
                 self.connected = True
-            except:
+                self.log_info_norepeat("Reached end of establish connection loop..")
+            except Exception as error:
+                self.log_info_norepeat(f"Errored out of loop with error: {error}")
                 time.sleep(self.connect_attempts_interval)
 
     def handle_connection_lost(self, error):
         self.logger.exception(error)
         if self.connected: # only trigger this once so we don't have multiple instances of establish_connection() running
             self.connected = False
+            self.running = False
+
+            # kill all other threads
+            if self.commands_observer:
+                self.commands_observer.stop()
+
+            ### AI WRITTEN EXPLANATION FOR THIS CODE
+            # The issue arises because handle_connection_lost is called from within one of the threads (e.g., change_tabbed_text), 
+            # and it attempts to join the same thread that's executing the method, which is not allowed.
+
+            # To fix this, I've added checks to prevent joining the current thread by comparing the thread's ident with threading.current_thread().ident.
+
+            # This ensures that when a thread calls handle_connection_lost, it won't try to join itself. 
+            # The threads will exit their loops naturally when self.running is set to False, and new threads will be started after reconnection.
+            if self.change_tabbed_text_thread and self.change_tabbed_text_thread.ident != threading.current_thread().ident:
+                self.change_tabbed_text_thread.join(timeout=5)
+                self.change_tabbed_text_thread = None
+            if self.switcher_thread and self.switcher_thread.ident != threading.current_thread().ident:
+                self.switcher_thread.join(timeout=5)
+                self.switcher_thread = None
 
             self.logger.error(f"OBS connection failed, reconnecting...")
             self.establish_connection()
-            self.logger.info(f"Reconnected to OBS!")
+            
+            # restart threads now that we're back online
+            self.running = True
+            if self.change_tabbed_text_thread is None:
+                self.change_tabbed_text_thread = threading.Thread(target=self.change_tabbed_text)
+                self.change_tabbed_text_thread.start()
+            if self.switcher_thread is None:
+                self.switcher_thread = threading.Thread(target=self.switcher)
+                self.switcher_thread.start()
+
+            self.log_info_norepeat(f"Reconnected to OBS!")
+
+    def on_record_state_changed(self, data):
+        saved_recording_data = None
+        output_state = data.output_state
+        if data.output_path is not None:
+            saved_recording_data = Path(data.output_path)
+        if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
+            self.handle_saved_file(saved_recording_data)
 
     def on_replay_buffer_saved(self, data):
         saved_replay = Path(data.saved_replay_path)
-        recording_dir = saved_replay.parents[0]
+        self.handle_saved_file(saved_replay)
+    
+    def handle_saved_file(self, filepath):
+        recording_dir = filepath.parents[0]
         error = False
         moved = False
 
@@ -133,22 +209,22 @@ class MegaScript:
                     correct_dir = Path.joinpath(recording_dir, names[0])
                     correct_dir.mkdir()
 
-                shutil.move(saved_replay, correct_dir)
+                shutil.move(filepath, correct_dir)
                 moved = True
             else:
                 error = True
-                self.logger.error(f"Error moving '{saved_replay}'. No application was detected as being in fullscreen.")
+                self.logger.error(f"Error moving '{filepath}'. No application was detected as being in fullscreen.")
 
         except Exception as error:
             error = True
             self.logger.exception(error)
             if moved:
-                self.logger.error(f"Error moving '{saved_replay}'. File was moved from original location to '{correct_dir}'.")
+                self.logger.error(f"Error moving '{filepath}'. File was moved from original location to '{correct_dir}'.")
             else:
-                self.logger.error(f"Error moving '{saved_replay}'. File was NOT moved from original location. \nVars dump: 'names' = {names}, 'correct_dir' = {correct_dir}.")
+                self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location. \nVars dump: 'names' = {names}, 'correct_dir' = {correct_dir}.")
 
         if not error:
-            self.logger.info(f"Succesfully saved original file '{saved_replay}' at '{correct_dir}'. Valid names considered: '{names}'.")
+            self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{names}'.")
             playsound("D:\\Music\\recordingbeep.mp3")
         else:
             playsound("D:\\Music\\recordingerror.mp3")
@@ -157,25 +233,48 @@ class MegaScript:
         full_screen_rect = (0, 0, self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1))
         try:
             hWnd = self.user32.GetForegroundWindow()
+
             rect = win32gui.GetWindowRect(hWnd)
+            window_name = win32gui.GetWindowText(hWnd)
+            rect_size_x = rect[2]
+            rect_size_y = rect[3]
+            fsr_size_x = full_screen_rect[2]
+            fsr_size_y = full_screen_rect[3]
+            fullscreen = False
             
-            return rect == full_screen_rect
+            if rect_size_x >= fsr_size_x and rect_size_y >= fsr_size_y:
+                fullscreen = True
+
+            self.log_info_norepeat(f"Fullscreen {fullscreen} for {window_name} | size_x = {rect_size_x} / {fsr_size_x}, size_y = {rect_size_y} / {fsr_size_y}")
+
+            # # check if size of window is within 8 px of being fullscreen
+            # # this is necessary because some games are freaks like slay the spire and mc and run in ALMOST fullscreen but not quite
+            # if math.isclose(rect_size_x, fsr_size_x, abs_tol=tolerance) and math.isclose(rect_size_y, fsr_size_y, abs_tol=tolerance):
+            #     fullscreen = True
+
         except Exception as error:
-            self.logger.exception(error)
+            self.logger.error(error)
             return False
+        
+        return fullscreen
 
     def switcher(self):
         interval = self.switcher_poll_interval
 
-        while True:
+        while self.running:
             if not self.switcher_active:
                 time.sleep(interval)
                 continue
-            current_scene = self.req.get_current_program_scene().scene_name
+
+            try:
+                current_scene = self.req.get_current_program_scene().scene_name
+            except Exception as error:
+                self.handle_connection_lost(error)
+
             if not(self.is_fullscreen()):
                 try:
                     if current_scene != "Alt Tabbed":
-                        self.logger.info("Setting scene to Alt Tabbed.")
+                        self.log_info_norepeat("Setting scene to Alt Tabbed.")
                         self.req.set_current_program_scene("Alt Tabbed")
                         self.afk_timer = int(time.time()) + self.buffer_timeout
                 except Exception as error:
@@ -183,8 +282,32 @@ class MegaScript:
             else:
                 try:
                     if current_scene != "Game Capture":
-                        self.logger.info("Setting scene to Game Capture.")
-                        self.req.set_current_program_scene("Game Capture")
+                        hWnd = self.user32.GetForegroundWindow()
+                        tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
+                        proc = psutil.Process(pid)
+                        exe_name = Path(proc.exe()).stem + ".exe"
+                        window_name = win32gui.GetWindowText(hWnd)
+                        class_name = win32gui.GetClassName(hWnd)
+                        obs_window_str = f"{window_name}:{class_name}:{exe_name}"
+                        window_str_safe = True
+
+                        for banned_str in self.banned_strings:
+                            if banned_str in obs_window_str:
+                                window_str_safe = False
+
+                        if window_str_safe:
+                            self.log_info_norepeat(f"Setting scene to Game Capture, switching Game Capture output to {obs_window_str}.")
+                            self.req.set_current_program_scene("Game Capture")
+                            self.req.set_input_settings(
+                                name="Capture 0", 
+                                settings={
+                                    "capture_mode": "window",
+                                    "window": obs_window_str
+                                },
+                                overlay=True
+                            )
+                        else:
+                            self.log_info_norepeat(f"NOT switching to Game Capture due to unsafe window string '{obs_window_str}!'")
                 except Exception as error:
                     self.handle_connection_lost(error)
             
@@ -200,11 +323,11 @@ class MegaScript:
 
             now = int(time.time())
             if current_scene == "Alt Tabbed" and now >= self.afk_timer and buffer_active:
-                self.logger.info(f"Stopping replay buffer, current time '{now}' greater than afk timer '{self.afk_timer}' and replay buffer active.")
+                self.log_info_norepeat(f"Stopping replay buffer, current time '{now}' greater than afk timer '{self.afk_timer}' and replay buffer active.")
                 self.req.stop_replay_buffer()
             
             elif current_scene == "Game Capture" and not(buffer_active):
-                self.logger.info("Starting replay buffer.")
+                self.log_info_norepeat("Starting replay buffer.")
                 self.req.start_replay_buffer()
         except Exception as error:
             self.handle_connection_lost(error)
@@ -220,7 +343,7 @@ class MegaScript:
     def change_tabbed_text(self):
         interval = self.change_tabbed_text_poll_interval
 
-        while True:
+        while self.running:
             try:
                 if self.req.get_current_program_scene().scene_name == "Alt Tabbed":
                     self.req.set_input_settings("Alt Tabbed Text", {
@@ -235,12 +358,12 @@ class MegaScript:
     def run(self):
         # start the text changer
         if self.change_tabbed_text_thread is None:
-            self.change_tabbed_text_thread = threading.Thread(target=self.change_tabbed_text, daemon=True)
+            self.change_tabbed_text_thread = threading.Thread(target=self.change_tabbed_text)
             self.change_tabbed_text_thread.start()
         
         # start the switcher
         if self.switcher_thread is None:
-            self.switcher_thread = threading.Thread(target=self.switcher, daemon=True)
+            self.switcher_thread = threading.Thread(target=self.switcher)
             self.switcher_thread.start()
 
         # create event handler for commands
@@ -279,25 +402,36 @@ class MegaScript:
                             commands_data = json.load(f)
                             if commands_data["toggleSwitcher"]:
                                 self.switcher_active = not(self.switcher_active)
-                                self.logger.info(f"Toggling switcher to {self.switcher_active}.")
+                                self.log_info_norepeat(f"Toggling switcher to {self.switcher_active}.")
                                 commands_data["toggleSwitcher"] = False
                             
                         with open(commands_path, "w") as f:
                             json.dump(commands_data, f)
 
         # start observer thread for commands
-        commandsEvent = CommandsEvent()
-        commandsObserver = Observer()
-        commandsObserver.schedule(
-            event_handler = commandsEvent, 
+        self.commands_event = CommandsEvent()
+        self.commands_observer = Observer()
+        self.commands_observer.schedule(
+            event_handler = self.commands_event, 
             path = self.script_path,
             recursive = False
         )
-        commandsObserver.start()
+        self.commands_observer.start()
 
-        # non blocking; keep main thread alive so the other children threads can do their jobs
-        keepalive = threading.Event()
-        keepalive.wait()
+        # keep the main thread alive
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.logger.info("Received KeyboardInterrupt, shutting down...")
+            self.running = False
+            self.commands_observer.stop()
+            self.commands_observer.join()
+            if self.change_tabbed_text_thread:
+                self.change_tabbed_text_thread.join(timeout=5)
+            if self.switcher_thread:
+                self.switcher_thread.join(timeout=5)
+            self.logger.info("Shutdown complete.")
 
 if __name__ == "__main__":
     ms = MegaScript()
