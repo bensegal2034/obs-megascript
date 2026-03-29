@@ -292,7 +292,7 @@ class MegaScript:
                         window_str_safe = True
 
                         for banned_str in self.banned_strings:
-                            if banned_str in obs_window_str:
+                            if banned_str.lower() in obs_window_str.lower():
                                 window_str_safe = False
 
                         if window_str_safe:
