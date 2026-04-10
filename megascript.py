@@ -5,6 +5,7 @@ import ctypes as ct
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from random import choice
 import win32gui, win32process, time, threading, psutil, shutil, logging, re, os, json
 
 class MegaScript:
@@ -29,13 +30,13 @@ class MegaScript:
             "c:"
         ]
         self.banned_strings = [
-            "Windows Default Lock Screen",
-            "Windows.UI.Core.CoreWindow",
-            "LockApp.exe",
-            "XamlExplorerHostIslandWindow",
+            "windows default lock screen",
+            "windows.ui.core.corewindow",
+            "lockapp.exe",
+            "xamlexplorerhostislandwindow",
             "explorer.exe",
-            "Mozilla Firefox",
-            "MozillaWindowClass",
+            "mozilla firefox",
+            "mozillawindowclass",
             "firefox.exe",
             "obs",
             "steam",
@@ -47,12 +48,16 @@ class MegaScript:
             "visual studio",
             "notepad",
             "github",
-            "mpv"
+            "mpv",
+            "windows input experience",
+            "program manager"
         ]
         self.emote_gen = self.get_emote()
 
         self.user32 = ct.windll.user32
         self.user32.SetProcessDPIAware()
+
+        self.connect_attempts_interval = 5
 
         self.switcher_thread = None
         self.switcher_poll_interval = 1
@@ -97,13 +102,10 @@ class MegaScript:
         self.logger_last_msg = msg
 
     def establish_connection(self):
-        self.obs_connection_timeout = 5
-        self.connect_attempts_interval = 5
-
         while not self.connected:
             try:
-                self.req = obs.ReqClient(host='localhost', port=4455, password='arcane2455', timeout=self.obs_connection_timeout)
-                self.evt = obs.EventClient(host='localhost', port=4455, password='arcane2455', timeout=self.obs_connection_timeout)
+                self.req = obs.ReqClient()
+                self.evt = obs.EventClient()
 
                 # run some test funcs to make sure we actually have a connection to obs
                 self.req.get_version()
@@ -113,6 +115,7 @@ class MegaScript:
                 # at this point if we haven't thrown an error we're probably chill
                 # set up the event callbacks and set connected to true
                 self.evt.callback.register(self.on_replay_buffer_saved)
+                #self.evt.callback.register(self.on_replay_buffer_state_changed)
                 self.evt.callback.register(self.on_record_state_changed)
                 self.connected = True
                 self.log_info_norepeat("Reached end of establish connection loop..")
@@ -164,50 +167,71 @@ class MegaScript:
         output_state = data.output_state
         if data.output_path is not None:
             saved_recording_data = Path(data.output_path)
-        if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
+        if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
+            playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
+        elif output_state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
             self.handle_saved_file(saved_recording_data)
 
     def on_replay_buffer_saved(self, data):
+        playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
         saved_replay = Path(data.saved_replay_path)
         self.handle_saved_file(saved_replay)
+
+    # def on_replay_buffer_state_changed(self, data):
+    #     output_state = data.output_state
+    #     print(output_state)
+    #     if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
+    #         playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
+
+    def check_names_against_dir(self, names, dir):
+        # this func stolen from here: https://stackoverflow.com/a/5320179
+        def findWholeWord(w):
+            return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search   
+             
+        valid_dir = None
+        winning_name = None
+        
+        for root, dirs, files in dir.walk():
+            for dir in dirs:
+                for name in names:
+                    if findWholeWord(dir)(name):
+                        valid_dir = Path.joinpath(root, dir)
+        
+        # we still haven't found a dir if this triggers
+        # iterate over dirs again, but this time match using in keyword
+        if valid_dir is None:
+            for root, dirs, files in dir.walk():
+                for dir in dirs:
+                    for name in names:
+                        if dir.lower() in name.lower():
+                            valid_dir = Path.joinpath(root, dir)
+        
+        return valid_dir, winning_name
     
     def handle_saved_file(self, filepath):
         recording_dir = filepath.parents[0]
         error = False
         moved = False
-
-        # this func stolen from here: https://stackoverflow.com/a/5320179
-        def findWholeWord(w):
-            return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search
+        fullscreen_windows = self.get_fullscreen_windows()
+        names = []
 
         try:
-            if self.is_fullscreen():
-                hWnd = self.user32.GetForegroundWindow()
-                tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
-                proc = psutil.Process(pid)
+            if fullscreen_windows:
+                # check against all open fullscreen windows
+                # technically this means that whatever window was addded earlier gets priority
+                # however i don't know of a better way to do this atm so it is what it is
+                # todo: maybe improve this
 
-                names = [Path(proc.exe()).stem, win32gui.GetWindowText(hWnd)] 
-                correct_dir = None
+                for window_dict in fullscreen_windows.values():
+                    names.append(window_dict["obs_window_str"])
                 
-                for root, dirs, files in recording_dir.walk():
-                    for dir in dirs:
-                        for name in names:
-                            if findWholeWord(dir)(name):
-                                correct_dir = Path.joinpath(root, dir)
+                correct_dir, winning_name = self.check_names_against_dir(names, recording_dir)
                 
-                # we still haven't found a dir if this triggers
-                # iterate over dirs again, but this time match using in keyword
+                # make our own dir if none is found
+                # use window name from first entry in fullscreen windows
                 if correct_dir is None:
-                    for root, dirs, files in recording_dir.walk():
-                        for dir in dirs:
-                            for name in names:
-                                if dir.lower() in name.lower():
-                                    correct_dir = Path.joinpath(root, dir)
-                
-                # still haven't found a correct dir, all search options exhausted
-                # make our own dir using the exe name if no valid dir is found
-                if correct_dir is None:
-                    correct_dir = Path.joinpath(recording_dir, names[0])
+                    first_window_name = next(iter(fullscreen_windows.keys()))
+                    correct_dir = Path.joinpath(recording_dir, first_window_name)
                     correct_dir.mkdir()
 
                 shutil.move(filepath, correct_dir)
@@ -226,17 +250,13 @@ class MegaScript:
 
         if not error:
             self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{names}'.")
-            playsound(str(Path.joinpath(self.script_path, "recordingbeep.mp3")))
+            playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
         else:
             playsound(str(Path.joinpath(self.script_path, "recordingerror.mp3")))
     
-    def is_fullscreen(self):
-        full_screen_rect = (0, 0, self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1))
-        try:
-            hWnd = self.user32.GetForegroundWindow()
+    def get_fullscreen_windows(self):
 
-            rect = win32gui.GetWindowRect(hWnd)
-            window_name = win32gui.GetWindowText(hWnd)
+        def is_hWnd_fullscreen(rect, full_screen_rect):
             rect_size_x = rect[2]
             rect_size_y = rect[3]
             fsr_size_x = full_screen_rect[2]
@@ -247,17 +267,51 @@ class MegaScript:
                 fullscreen = True
 
             #self.log_info_norepeat(f"Fullscreen {fullscreen} for {window_name} | size_x = {rect_size_x} / {fsr_size_x}, size_y = {rect_size_y} / {fsr_size_y}")
+            return fullscreen
 
-            # # check if size of window is within 8 px of being fullscreen
-            # # this is necessary because some games are freaks like slay the spire and mc and run in ALMOST fullscreen but not quite
-            # if math.isclose(rect_size_x, fsr_size_x, abs_tol=tolerance) and math.isclose(rect_size_y, fsr_size_y, abs_tol=tolerance):
-            #     fullscreen = True
+        def win_enum_handler(hWnd, fullscreen_windows):
+            full_screen_rect = fullscreen_windows["full_screen_rect"]
+            rect = win32gui.GetWindowRect(hWnd)
+            window_name = win32gui.GetWindowText(hWnd)
+            if win32gui.IsWindowVisible(hWnd):
+                if is_hWnd_fullscreen(rect, full_screen_rect):
+                    if window_name != "":
+                        fullscreen_window_dict = {}
+                        tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
+                        proc = psutil.Process(pid)
+                        exe_name = Path(proc.exe()).stem + ".exe"
+                        class_name = win32gui.GetClassName(hWnd)
+                        obs_window_str = f"{window_name}:{class_name}:{exe_name}"
+                        window_str_safe = True
 
+                        for banned_str in self.banned_strings:
+                            if banned_str.lower() in obs_window_str.lower():
+                                window_str_safe = False
+
+                        if window_str_safe:
+                            fullscreen_window_dict.update({
+                                "hWnd": hWnd,
+                                "tid": tid,
+                                "pid": pid,
+                                "proc": proc,
+                                "exe_name": exe_name,
+                                "class_name": class_name,
+                                "obs_window_str": obs_window_str
+                            })
+                            fullscreen_windows[window_name] = fullscreen_window_dict
+
+        try:
+            fullscreen_windows = {
+                "full_screen_rect": (0, 0, self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1))
+            }
+            win32gui.EnumWindows(win_enum_handler, fullscreen_windows)
+            # remove this because no other functions really need it and it was a massive headache to deal with otherwise
+            fullscreen_windows.pop("full_screen_rect")
         except Exception as error:
             self.logger.error(error)
             return False
         
-        return fullscreen
+        return fullscreen_windows
 
     def switcher(self):
         interval = self.switcher_poll_interval
@@ -272,7 +326,31 @@ class MegaScript:
             except Exception as error:
                 self.handle_connection_lost(error)
 
-            if not(self.is_fullscreen()):
+            fullscreen_windows = self.get_fullscreen_windows()
+            chosen_window_dict = None
+            if len(fullscreen_windows) == 1:
+                # get the first value from the dict
+                chosen_window_dict = next(iter(fullscreen_windows.values()))
+            else:
+                # multiple valid choices to switch to as more than 1 fullscreen window has been detected
+                # check if any of them match our recording directory, if so, use that one
+                # otherwise, fuck it dude just pick at random
+                # todo: improve this
+                names = []
+                recording_directory = self.req.get_record_directory().record_directory
+                for window_dict in fullscreen_windows.values():
+                    names.append(window_dict["obs_window_str"])
+                valid_dir, winning_name = self.check_names_against_dir(names, recording_directory)
+                if valid_dir:
+                    for window_dict in fullscreen_windows.values():
+                        if window_dict["obs_window_str"] == winning_name:
+                            chosen_window_dict = window_dict
+                else:
+                    chosen_window_dict = choice(list(fullscreen_windows.values()))
+            
+            is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
+
+            if not is_in_foreground:
                 try:
                     if current_scene != "Alt Tabbed":
                         self.log_info_norepeat("Setting scene to Alt Tabbed.")
@@ -283,32 +361,17 @@ class MegaScript:
             else:
                 try:
                     if current_scene != "Game Capture":
-                        hWnd = self.user32.GetForegroundWindow()
-                        tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
-                        proc = psutil.Process(pid)
-                        exe_name = Path(proc.exe()).stem + ".exe"
-                        window_name = win32gui.GetWindowText(hWnd)
-                        class_name = win32gui.GetClassName(hWnd)
-                        obs_window_str = f"{window_name}:{class_name}:{exe_name}"
-                        window_str_safe = True
-
-                        for banned_str in self.banned_strings:
-                            if banned_str.lower() in obs_window_str.lower():
-                                window_str_safe = False
-
-                        if window_str_safe:
-                            self.log_info_norepeat(f"Setting scene to Game Capture, switching Game Capture output to {obs_window_str}.")
-                            self.req.set_current_program_scene("Game Capture")
-                            self.req.set_input_settings(
-                                name="Capture 0", 
-                                settings={
-                                    "capture_mode": "window",
-                                    "window": obs_window_str
-                                },
-                                overlay=True
-                            )
-                        else:
-                            self.log_info_norepeat(f"NOT switching to Game Capture due to unsafe window string '{obs_window_str}!'")
+                        self.log_info_norepeat(f"Setting scene to Game Capture, switching Game Capture output to {chosen_window_dict["obs_window_str"]}.")
+                        self.req.set_current_program_scene("Game Capture")
+                        self.req.set_input_settings(
+                            name="Capture 0", 
+                            settings={
+                                "capture_mode": "window",
+                                "window": chosen_window_dict["obs_window_str"]
+                            },
+                            overlay=True
+                        )
+                        
                 except Exception as error:
                     self.handle_connection_lost(error)
             
