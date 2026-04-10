@@ -246,7 +246,7 @@ class MegaScript:
             if rect_size_x >= fsr_size_x and rect_size_y >= fsr_size_y:
                 fullscreen = True
 
-            self.log_info_norepeat(f"Fullscreen {fullscreen} for {window_name} | size_x = {rect_size_x} / {fsr_size_x}, size_y = {rect_size_y} / {fsr_size_y}")
+            #self.log_info_norepeat(f"Fullscreen {fullscreen} for {window_name} | size_x = {rect_size_x} / {fsr_size_x}, size_y = {rect_size_y} / {fsr_size_y}")
 
             # # check if size of window is within 8 px of being fullscreen
             # # this is necessary because some games are freaks like slay the spire and mc and run in ALMOST fullscreen but not quite
