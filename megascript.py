@@ -266,7 +266,6 @@ class MegaScript:
             if rect_size_x >= fsr_size_x and rect_size_y >= fsr_size_y:
                 fullscreen = True
 
-            #self.log_info_norepeat(f"Fullscreen {fullscreen} for {window_name} | size_x = {rect_size_x} / {fsr_size_x}, size_y = {rect_size_y} / {fsr_size_y}")
             return fullscreen
 
         def win_enum_handler(hWnd, fullscreen_windows):
@@ -323,32 +322,38 @@ class MegaScript:
 
             try:
                 current_scene = self.req.get_current_program_scene().scene_name
+
+                fullscreen_windows = self.get_fullscreen_windows()
+                chosen_window_dict = None
+                if len(fullscreen_windows) == 0:
+                    self.log_info_norepeat(f"No fullscreen windows detected!")
+                    is_in_foreground = False
+                elif len(fullscreen_windows) == 1:
+                    # get the first value from the dict
+                    chosen_window_dict = next(iter(fullscreen_windows.values()))
+                    is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
+                else:
+                    self.log_info_norepeat(f"Multiple valid choices detected in fullscreen_windows with value: {fullscreen_windows}")
+                    # multiple valid choices to switch to as more than 1 fullscreen window has been detected
+                    # check if any of them match our recording directory, if so, use that one
+                    # otherwise, fuck it dude just pick at random
+                    # todo: improve this
+                    names = []
+                    recording_directory = self.req.get_record_directory().record_directory
+                    for window_dict in fullscreen_windows.values():
+                        names.append(window_dict["obs_window_str"])
+                    valid_dir, winning_name = self.check_names_against_dir(names, recording_directory)
+                    if valid_dir:
+                        for window_dict in fullscreen_windows.values():
+                            if window_dict["obs_window_str"] == winning_name:
+                                chosen_window_dict = window_dict
+                    else:
+                        chosen_window_dict = choice(list(fullscreen_windows.values()))
+                    self.log_info_norepeat(f"Chose {chosen_window_dict} from multiple choice fullscreen_windows dict")
+                    is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
+            
             except Exception as error:
                 self.handle_connection_lost(error)
-
-            fullscreen_windows = self.get_fullscreen_windows()
-            chosen_window_dict = None
-            if len(fullscreen_windows) == 1:
-                # get the first value from the dict
-                chosen_window_dict = next(iter(fullscreen_windows.values()))
-            else:
-                # multiple valid choices to switch to as more than 1 fullscreen window has been detected
-                # check if any of them match our recording directory, if so, use that one
-                # otherwise, fuck it dude just pick at random
-                # todo: improve this
-                names = []
-                recording_directory = self.req.get_record_directory().record_directory
-                for window_dict in fullscreen_windows.values():
-                    names.append(window_dict["obs_window_str"])
-                valid_dir, winning_name = self.check_names_against_dir(names, recording_directory)
-                if valid_dir:
-                    for window_dict in fullscreen_windows.values():
-                        if window_dict["obs_window_str"] == winning_name:
-                            chosen_window_dict = window_dict
-                else:
-                    chosen_window_dict = choice(list(fullscreen_windows.values()))
-            
-            is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
 
             if not is_in_foreground:
                 try:
