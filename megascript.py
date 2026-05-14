@@ -6,7 +6,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from random import choice
-import win32gui, win32process, time, threading, psutil, shutil, logging, re, os, json
+from send2trash import send2trash
+import win32gui, win32process, time, threading, psutil, shutil, logging, re, os, json, subprocess
 
 class MegaScript:
 
@@ -96,6 +97,8 @@ class MegaScript:
 
         self.commands_observer = None
         self.commands_event = None
+
+        self.instant_replay_requested = False
 
     def log_info_norepeat(self, msg):
         if not msg == self.logger_last_msg:
@@ -229,44 +232,58 @@ class MegaScript:
         fullscreen_windows = self.get_fullscreen_windows()
         names = []
 
-        try:
-            if fullscreen_windows:
-                # check against all open fullscreen windows
-                # technically this means that whatever window was addded earlier gets priority
-                # however i don't know of a better way to do this atm so it is what it is
-                # todo: maybe improve this
+        if self.instant_replay_requested:
+            self.instant_replay_requested = False
+            mpv_args = [
+                "mpv",
+                filepath
+            ]
+            playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
+            subprocess.run(mpv_args)
+            try:
+                send2trash(filepath)
+                self.log_info_norepeat(f"Sent {filepath} to trash after user exited instant replay successfully!")
+            except Exception as error:
+                self.logger.error(error)
+        else:
+            try:
+                if fullscreen_windows:
+                    # check against all open fullscreen windows
+                    # technically this means that whatever window was addded earlier gets priority
+                    # however i don't know of a better way to do this atm so it is what it is
+                    # todo: maybe improve this
 
-                for window_dict in fullscreen_windows.values():
-                    names.append(window_dict["obs_window_str"])
-                
-                correct_dir, winning_name = self.check_names_against_dir(names, recording_dir)
-                
-                # make our own dir if none is found
-                # use window name from first entry in fullscreen windows
-                if correct_dir is None:
-                    first_window_name = next(iter(fullscreen_windows.keys()))
-                    correct_dir = Path.joinpath(recording_dir, first_window_name)
-                    correct_dir.mkdir()
+                    for window_dict in fullscreen_windows.values():
+                        names.append(window_dict["obs_window_str"])
+                    
+                    correct_dir, winning_name = self.check_names_against_dir(names, recording_dir)
+                    
+                    # make our own dir if none is found
+                    # use window name from first entry in fullscreen windows
+                    if correct_dir is None:
+                        first_window_name = next(iter(fullscreen_windows.keys()))
+                        correct_dir = Path.joinpath(recording_dir, first_window_name)
+                        correct_dir.mkdir()
 
-                shutil.move(filepath, correct_dir)
-                moved = True
-            else:
+                    shutil.move(filepath, correct_dir)
+                    moved = True
+                else:
+                    error = True
+                    self.logger.error(f"Error moving '{filepath}'. No application was detected as being in fullscreen.")
+
+            except Exception as error:
                 error = True
-                self.logger.error(f"Error moving '{filepath}'. No application was detected as being in fullscreen.")
-
-        except Exception as error:
-            error = True
-            self.logger.exception(error)
-            if moved:
-                self.logger.error(f"Error moving '{filepath}'. File was moved from original location to '{correct_dir}'.")
-            else:
-                self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location. \nVars dump: 'names' = {names}, 'correct_dir' = {correct_dir}.")
+                self.logger.exception(error)
+                if moved:
+                    self.logger.error(f"Error moving '{filepath}'. File was moved from original location to '{correct_dir}'.")
+                else:
+                    self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location. \nVars dump: 'names' = {names}, 'correct_dir' = {correct_dir}.")
 
         if not error:
             self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{names}'.")
             playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
         else:
-            playsound(str(Path.joinpath(self.script_path, "recordingerror.mp3")))
+            playsound(str(Path.joinpath(self.script_path, "error.mp3")))
     
     def get_fullscreen_windows(self):
 
@@ -349,7 +366,7 @@ class MegaScript:
                 else:
                     self.log_info_norepeat(f"Multiple valid choices detected in fullscreen_windows with value: {fullscreen_windows}")
                     # multiple valid choices to switch to as more than 1 fullscreen window has been detected
-                    # check if any of them match our recording directory, if so, use that one
+                    # check if any of them match a folder in our recording directory, if so, use that one
                     # otherwise, fuck it dude just pick at random
                     # todo: improve this
                     names = []
@@ -438,6 +455,21 @@ class MegaScript:
             time.sleep(interval)
             continue
 
+    def instant_replay(self):
+        try:
+            buffer_active = self.req.get_replay_buffer_status().output_active
+            if buffer_active and not self.instant_replay_requested:
+                self.instant_replay_requested = True
+                self.req.save_replay_buffer()
+            else:
+                playsound(str(Path.joinpath(self.script_path, "error.mp3")))
+                if not buffer_active:
+                    self.log_info_norepeat("Cannot show instant replay; replay buffer inactive!")
+                elif self.instant_replay_requested:
+                    self.log_info_norepeat("Cannot show instant replay; one was already requested recently!")
+        except Exception as error:
+            self.handle_connection_lost(error)
+
     def run(self):
         # start the text changer
         if self.change_tabbed_text_thread is None:
@@ -477,6 +509,7 @@ class MegaScript:
                     return None
 
                 elif event.event_type == 'modified':
+                    print(event)
                     if "commands.json" in event.src_path:
                         commands_path = Path.joinpath(self.script_path, "commands.json")
                         commands_data = None
@@ -484,9 +517,16 @@ class MegaScript:
                         with open(commands_path, "r") as f:
                             commands_data = json.load(f)
                             if commands_data["toggleSwitcher"]:
+                                playsound(str(Path.joinpath(self.script_path, "commandreceived.mp3")))
                                 self.switcher_active = not(self.switcher_active)
                                 self.log_info_norepeat(f"Toggling switcher to {self.switcher_active}.")
                                 commands_data["toggleSwitcher"] = False
+                            
+                            if commands_data["instantReplay"]:
+                                playsound(str(Path.joinpath(self.script_path, "commandreceived.mp3")))
+                                self.log_info_norepeat("Attempting to initiate instant replay...")
+                                self.instant_replay()
+                                commands_data["instantReplay"] = False
                             
                         with open(commands_path, "w") as f:
                             json.dump(commands_data, f)
