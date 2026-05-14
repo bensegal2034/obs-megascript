@@ -50,7 +50,8 @@ class MegaScript:
             "github",
             "mpv",
             "windows input experience",
-            "program manager"
+            "program manager",
+            "sharex"
         ]
         self.emote_gen = self.get_emote()
 
@@ -183,29 +184,42 @@ class MegaScript:
     #     if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
     #         playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
 
-    def check_names_against_dir(self, names, dir):
+    def check_names_against_dir(self, names, directory):
         # this func stolen from here: https://stackoverflow.com/a/5320179
         def findWholeWord(w):
-            return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search   
-             
+            return re.compile(r'\b({0})\b'.format(w), flags=re.IGNORECASE).search
+
         valid_dir = None
         winning_name = None
-        
-        for root, dirs, files in dir.walk():
-            for dir in dirs:
+        search_root = Path(directory)
+
+        for root, dirs, files in os.walk(search_root):
+            for subdir in dirs:
                 for name in names:
-                    if findWholeWord(dir)(name):
-                        valid_dir = Path.joinpath(root, dir)
-        
+                    if findWholeWord(subdir)(name):
+                        valid_dir = Path(root) / subdir
+                        winning_name = name
+                        break
+                if valid_dir is not None:
+                    break
+            if valid_dir is not None:
+                break
+
         # we still haven't found a dir if this triggers
         # iterate over dirs again, but this time match using in keyword
         if valid_dir is None:
-            for root, dirs, files in dir.walk():
-                for dir in dirs:
+            for root, dirs, files in os.walk(search_root):
+                for subdir in dirs:
                     for name in names:
-                        if dir.lower() in name.lower():
-                            valid_dir = Path.joinpath(root, dir)
-        
+                        if subdir.lower() in name.lower():
+                            valid_dir = Path(root) / subdir
+                            winning_name = name
+                            break
+                    if valid_dir is not None:
+                        break
+                if valid_dir is not None:
+                    break
+
         return valid_dir, winning_name
     
     def handle_saved_file(self, filepath):
@@ -326,7 +340,7 @@ class MegaScript:
                 fullscreen_windows = self.get_fullscreen_windows()
                 chosen_window_dict = None
                 if len(fullscreen_windows) == 0:
-                    self.log_info_norepeat(f"No fullscreen windows detected!")
+                    #self.log_info_norepeat(f"No fullscreen windows detected!")
                     is_in_foreground = False
                 elif len(fullscreen_windows) == 1:
                     # get the first value from the dict
