@@ -1,4 +1,5 @@
 import obsws_python as obs
+from obsws_python import error as obserror
 from random import choice
 from playsound import playsound
 import ctypes as ct
@@ -151,8 +152,11 @@ class MegaScript:
             if self.switcher_thread and self.switcher_thread.ident != threading.current_thread().ident:
                 self.switcher_thread.join(timeout=5)
                 self.switcher_thread = None
-
-            self.logger.error(f"OBS connection failed, reconnecting...")
+            
+            if not isinstance(error, obserror):
+                self.logger.error(f"OBS connection failed but error is not an OBS connection error! (Instead instance of {type(error)}!) Reconnecting...")
+            else:
+                self.logger.error("OBS connection failed, reconnecting...")
             self.establish_connection()
             
             # restart threads now that we're back online
