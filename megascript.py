@@ -236,6 +236,7 @@ class MegaScript:
             self.instant_replay_requested = False
             mpv_args = [
                 "mpv",
+                "--pause",
                 filepath
             ]
             playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
@@ -352,7 +353,11 @@ class MegaScript:
                 continue
 
             try:
-                current_scene = self.req.get_current_program_scene().scene_name
+                current_scene_data = self.req.get_current_program_scene()
+                current_scene = current_scene_data.scene_name
+                if current_scene is None:
+                    time.sleep(interval) 
+                    continue
 
                 fullscreen_windows = self.get_fullscreen_windows()
                 chosen_window_dict = None
@@ -418,7 +423,10 @@ class MegaScript:
 
     def manage_buffer_state(self):
         try:
-            current_scene = self.req.get_current_program_scene().scene_name
+            current_scene_data = self.req.get_current_program_scene()
+            current_scene = current_scene_data.scene_name
+            if current_scene is None:
+                return
             buffer_active = self.req.get_replay_buffer_status().output_active
 
             now = int(time.time())
@@ -445,7 +453,13 @@ class MegaScript:
 
         while self.running:
             try:
-                if self.req.get_current_program_scene().scene_name == "Alt Tabbed":
+                current_scene_data = self.req.get_current_program_scene()
+                current_scene = current_scene_data.scene_name
+                if current_scene is None:
+                    time.sleep(interval) 
+                    continue
+
+                if current_scene == "Alt Tabbed":
                     self.req.set_input_settings("Alt Tabbed Text", {
                         "text": f"Alt Tabbed {next(self.emote_gen)}"
                     }, True)
