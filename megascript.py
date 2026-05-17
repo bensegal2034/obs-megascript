@@ -359,7 +359,7 @@ class MegaScript:
             try:
                 current_scene_data = self.req.get_current_program_scene()
                 current_scene = current_scene_data.scene_name
-                if current_scene is None:
+                if current_scene_data is None:
                     time.sleep(interval) 
                     continue
 
@@ -429,7 +429,7 @@ class MegaScript:
         try:
             current_scene_data = self.req.get_current_program_scene()
             current_scene = current_scene_data.scene_name
-            if current_scene is None:
+            if current_scene_data is None:
                 return
             buffer_active = self.req.get_replay_buffer_status().output_active
 
@@ -459,7 +459,7 @@ class MegaScript:
             try:
                 current_scene_data = self.req.get_current_program_scene()
                 current_scene = current_scene_data.scene_name
-                if current_scene is None:
+                if current_scene_data is None:
                     time.sleep(interval) 
                     continue
 
