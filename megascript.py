@@ -6,9 +6,8 @@ import ctypes as ct
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from random import choice
 from send2trash import send2trash
-import win32gui, win32process, time, threading, psutil, shutil, logging, re, os, json, subprocess
+import win32gui, win32process, time, threading, psutil, shutil, logging, re, os, json, subprocess, random
 
 class MegaScript:
 
@@ -100,6 +99,10 @@ class MegaScript:
         self.commands_event = None
 
         self.instant_replay_requested = False
+
+        self.AFK_SCENE_NAME = "Alt Tabbed"
+        self.GAME_SCENE_NAME = "Game Capture"
+        self.DISCORD_SCENE_NAME = "Discord Capture"
 
     def log_info_norepeat(self, msg):
         if not msg == self.logger_last_msg:
@@ -233,8 +236,7 @@ class MegaScript:
         recording_dir = filepath.parents[0]
         error = False
         moved = False
-        fullscreen_windows = self.get_fullscreen_windows()
-        names = []
+        valid_windows = self.get_valid_windows()
 
         if self.instant_replay_requested:
             self.instant_replay_requested = False
@@ -252,21 +254,37 @@ class MegaScript:
                 self.logger.error(error)
         else:
             try:
-                if fullscreen_windows:
-                    # check against all open fullscreen windows
-                    # technically this means that whatever window was addded earlier gets priority
-                    # however i don't know of a better way to do this atm so it is what it is
-                    # todo: maybe improve this
+                if valid_windows:
+                    # check if we have focused windows
+                    focused_windows = [window for window in valid_windows.values() if window.get("focused")]
+                    correct_dir = None
+                    if focused_windows:
+                        # no need to sort through these further, should only have 1 focused window
+                        # send that off to be checked against recording dirs
+                        focused_names = [window.get("obs_window_str") for window in focused_windows]
+                        dir, name = self.check_names_against_dir(focused_names, recording_dir)
+                        correct_dir = dir
+                    else:
+                        # no windows are focused, but we have valid windows still
+                        # go through all nonspecial window names first and try to match them against a directory
+                        nonspecial_names = [window.get("obs_window_str") for window in valid_windows.values() if not window.get("special_app")]
+                        special_names = [window.get("obs_window_str") for window in valid_windows.values() if window.get("special_app")]
+                        dir_nonspecial, name_nonspecial = self.check_names_against_dir(nonspecial_names, recording_dir)
+                        dir_special, name_special = self.check_names_against_dir(special_names, recording_dir)
+                        if dir_nonspecial:
+                            correct_dir = dir_nonspecial
+                        else:
+                            # no nonspecial window names were valid
+                            # set correct dir to be the special dir returned
+                            correct_dir = dir_special
+                            # if this is None that's fine because we check that next
+                            # reason things are done in this order is because we prioritize nonspecial apps (i.e games) first
 
-                    for window_dict in fullscreen_windows.values():
-                        names.append(window_dict["obs_window_str"])
-                    
-                    correct_dir, winning_name = self.check_names_against_dir(names, recording_dir)
                     
                     # make our own dir if none is found
                     # use window name from first entry in fullscreen windows
                     if correct_dir is None:
-                        first_window_name = next(iter(fullscreen_windows.keys()))
+                        first_window_name = next(iter(valid_windows.keys()))
                         correct_dir = Path.joinpath(recording_dir, first_window_name)
                         correct_dir.mkdir()
 
@@ -274,7 +292,7 @@ class MegaScript:
                     moved = True
                 else:
                     error = True
-                    self.logger.error(f"Error moving '{filepath}'. No application was detected as being in fullscreen.")
+                    self.logger.error(f"Error moving '{filepath}'. No application was detected as valid.")
 
             except Exception as error:
                 error = True
@@ -282,15 +300,24 @@ class MegaScript:
                 if moved:
                     self.logger.error(f"Error moving '{filepath}'. File was moved from original location to '{correct_dir}'.")
                 else:
-                    self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location. \nVars dump: 'names' = {names}, 'correct_dir' = {correct_dir}.")
+                    self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location.")
 
         if not error:
-            self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{names}'.")
+            self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{nonspecial_names}'.")
             playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
         else:
             playsound(str(Path.joinpath(self.script_path, "error.mp3")))
     
-    def get_fullscreen_windows(self):
+    def get_valid_windows(self):
+        # a "valid window" is defined by a window that is:
+        # fullscreen (does NOT have to be focused)
+        # or a window that matches the "special windows" list of strings
+
+        # list is here to determine any windows that we should ALWAYS return in the list
+        # regardless of if they are fullscreen or not
+        special_nongame_windows = [
+            "discord"
+        ]
 
         def is_hWnd_fullscreen(rect, full_screen_rect):
             rect_size_x = rect[2]
@@ -304,19 +331,27 @@ class MegaScript:
 
             return fullscreen
 
-        def win_enum_handler(hWnd, fullscreen_windows):
-            full_screen_rect = fullscreen_windows["full_screen_rect"]
-            rect = win32gui.GetWindowRect(hWnd)
-            window_name = win32gui.GetWindowText(hWnd)
+        def win_enum_handler(hWnd, valid_windows_list):
+            full_screen_rect = valid_windows_list["full_screen_rect"]
+            # below if statement does NOT mean the window is the one focused
+            # this means the window has the visible bit set. 
+            # this check is here to filter out weird windows that we don't care about
             if win32gui.IsWindowVisible(hWnd):
-                if is_hWnd_fullscreen(rect, full_screen_rect):
+                # setup all of our info about the window
+                rect = win32gui.GetWindowRect(hWnd)
+                window_name = win32gui.GetWindowText(hWnd)
+                tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
+                proc = psutil.Process(pid)
+                exe_name = Path(proc.exe()).stem + ".exe"
+                class_name = win32gui.GetClassName(hWnd)
+                obs_window_str = f"{window_name}:{class_name}:{exe_name}"
+                special_app = any(window_name.lower() in obs_window_str.lower() for window_name in special_nongame_windows)
+                focused = hWnd == win32gui.GetForegroundWindow()
+                fullscreen = is_hWnd_fullscreen(rect, full_screen_rect)
+
+                if fullscreen or special_app:
                     if window_name != "":
-                        fullscreen_window_dict = {}
-                        tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
-                        proc = psutil.Process(pid)
-                        exe_name = Path(proc.exe()).stem + ".exe"
-                        class_name = win32gui.GetClassName(hWnd)
-                        obs_window_str = f"{window_name}:{class_name}:{exe_name}"
+                        window_info_dict = {}
                         window_str_safe = True
 
                         for banned_str in self.banned_strings:
@@ -324,29 +359,32 @@ class MegaScript:
                                 window_str_safe = False
 
                         if window_str_safe:
-                            fullscreen_window_dict.update({
+                            window_info_dict.update({
                                 "hWnd": hWnd,
                                 "tid": tid,
                                 "pid": pid,
                                 "proc": proc,
                                 "exe_name": exe_name,
                                 "class_name": class_name,
-                                "obs_window_str": obs_window_str
+                                "obs_window_str": obs_window_str,
+                                "focused": focused,
+                                "fullscreen": fullscreen,
+                                "special_app": special_app
                             })
-                            fullscreen_windows[window_name] = fullscreen_window_dict
+                            valid_windows_list[window_name] = window_info_dict
 
         try:
-            fullscreen_windows = {
+            valid_windows_list = {
                 "full_screen_rect": (0, 0, self.user32.GetSystemMetrics(0), self.user32.GetSystemMetrics(1))
             }
-            win32gui.EnumWindows(win_enum_handler, fullscreen_windows)
+            win32gui.EnumWindows(win_enum_handler, valid_windows_list)
             # remove this because no other functions really need it and it was a massive headache to deal with otherwise
-            fullscreen_windows.pop("full_screen_rect")
+            valid_windows_list.pop("full_screen_rect")
         except Exception as error:
             self.logger.error(error)
             return False
         
-        return fullscreen_windows
+        return valid_windows_list
 
     def switcher(self):
         interval = self.switcher_poll_interval
@@ -363,62 +401,66 @@ class MegaScript:
                     time.sleep(interval) 
                     continue
 
-                fullscreen_windows = self.get_fullscreen_windows()
-                chosen_window_dict = None
-                if len(fullscreen_windows) == 0:
-                    #self.log_info_norepeat(f"No fullscreen windows detected!")
-                    is_in_foreground = False
-                elif len(fullscreen_windows) == 1:
-                    # get the first value from the dict
-                    chosen_window_dict = next(iter(fullscreen_windows.values()))
-                    is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
-                else:
-                    self.log_info_norepeat(f"Multiple valid choices detected in fullscreen_windows with value: {fullscreen_windows}")
-                    # multiple valid choices to switch to as more than 1 fullscreen window has been detected
-                    # check if any of them match a folder in our recording directory, if so, use that one
-                    # otherwise, fuck it dude just pick at random
-                    # todo: improve this
-                    names = []
-                    recording_directory = self.req.get_record_directory().record_directory
-                    for window_dict in fullscreen_windows.values():
-                        names.append(window_dict["obs_window_str"])
-                    valid_dir, winning_name = self.check_names_against_dir(names, recording_directory)
-                    if valid_dir:
-                        for window_dict in fullscreen_windows.values():
-                            if window_dict["obs_window_str"] == winning_name:
-                                chosen_window_dict = window_dict
+                valid_windows = self.get_valid_windows()
+                
+                if valid_windows:
+                    # first obtain list of all focused windows
+                    # this SHOULD be only one window, but you never know
+                    focused_windows = [window for window in valid_windows.values() if window.get("focused")]
+                    # separate them out further into lists for special and non special focused windows
+                    focused_special = [window for window in focused_windows if window.get("special_app")]
+                    focused_notspecial = [window for window in focused_windows if not window.get("special_app")]
+                    #self.log_info_norepeat(f"Found valid windows! Focused windows var dump: \nfocused_windows: {focused_windows}\nfocused_special: {focused_special}\nfocused_notspecial:{focused_notspecial}")
+                    chosen_window = None
+
+                    if not focused_windows: 
+                        if current_scene != self.AFK_SCENE_NAME:
+                            self.log_info_norepeat(f"Setting scene to {self.AFK_SCENE_NAME}")
+                            self.req.set_current_program_scene(self.AFK_SCENE_NAME)
+                            self.afk_timer = int(time.time()) + self.buffer_timeout
                     else:
-                        chosen_window_dict = choice(list(fullscreen_windows.values()))
-                    self.log_info_norepeat(f"Chose {chosen_window_dict} from multiple choice fullscreen_windows dict")
-                    is_in_foreground = chosen_window_dict["hWnd"] == self.user32.GetForegroundWindow()
-            
+                        # check game capture stuff first because we prioritize games over special windows
+                        # we only care about the non special focused windows here
+                        if current_scene != self.GAME_SCENE_NAME and focused_notspecial:
+                            if len(focused_notspecial) == 1:
+                                chosen_window = focused_notspecial[0]
+                            else:
+                                chosen_window = random.choice(focused_notspecial)
+                                self.logger.warning(f"Detected multiple focused nonspecial windows! Selected {chosen_window} to switch to at random.")
+
+                            self.log_info_norepeat(f"Setting scene to {self.GAME_SCENE_NAME}, switching {self.GAME_SCENE_NAME} output to {chosen_window["obs_window_str"]}.")
+                            self.req.set_current_program_scene(self.GAME_SCENE_NAME)
+                            self.req.set_input_settings(
+                                name="Capture 0", 
+                                settings={
+                                    "capture_mode": "window",
+                                    "window": chosen_window["obs_window_str"]
+                                },
+                                overlay=True
+                            )
+                        elif current_scene != self.DISCORD_SCENE_NAME and focused_special:
+                            if any("discord" in window.get("obs_window_str").lower() for window in focused_special):
+                                if len(focused_special) == 1:
+                                    chosen_window = focused_special[0]
+                                else:
+                                    chosen_window = random.choice(focused_special)
+                                    self.logger.warning(f"Detected multiple focused special windows with 'discord' in their obs_window_str! Selected {chosen_window} to switch to at random.")
+                                
+                            self.log_info_norepeat(f"Setting scene to {self.DISCORD_SCENE_NAME}, switching {self.DISCORD_SCENE_NAME} output to {chosen_window["obs_window_str"]}.")
+                            self.req.set_current_program_scene(self.DISCORD_SCENE_NAME)
+                            self.req.set_input_settings(
+                                name="Discord Window Capture", 
+                                settings={
+                                    "window": chosen_window["obs_window_str"]
+                                },
+                                overlay=True
+                            )
+                        else:
+                            pass
+                            #self.log_info_norepeat("Valid focused windows detected but none matched criteria to switch scene!")
+                
             except Exception as error:
                 self.handle_connection_lost(error)
-
-            if not is_in_foreground:
-                try:
-                    if current_scene != "Alt Tabbed":
-                        self.log_info_norepeat("Setting scene to Alt Tabbed.")
-                        self.req.set_current_program_scene("Alt Tabbed")
-                        self.afk_timer = int(time.time()) + self.buffer_timeout
-                except Exception as error:
-                    self.handle_connection_lost(error)
-            else:
-                try:
-                    if current_scene != "Game Capture":
-                        self.log_info_norepeat(f"Setting scene to Game Capture, switching Game Capture output to {chosen_window_dict["obs_window_str"]}.")
-                        self.req.set_current_program_scene("Game Capture")
-                        self.req.set_input_settings(
-                            name="Capture 0", 
-                            settings={
-                                "capture_mode": "window",
-                                "window": chosen_window_dict["obs_window_str"]
-                            },
-                            overlay=True
-                        )
-                        
-                except Exception as error:
-                    self.handle_connection_lost(error)
             
             self.manage_buffer_state()
             
@@ -434,11 +476,11 @@ class MegaScript:
             buffer_active = self.req.get_replay_buffer_status().output_active
 
             now = int(time.time())
-            if current_scene == "Alt Tabbed" and now >= self.afk_timer and buffer_active:
+            if current_scene == self.AFK_SCENE_NAME and now >= self.afk_timer and buffer_active:
                 self.log_info_norepeat(f"Stopping replay buffer, current time '{now}' greater than afk timer '{self.afk_timer}' and replay buffer active.")
                 self.req.stop_replay_buffer()
             
-            elif current_scene == "Game Capture" and not(buffer_active):
+            elif current_scene == self.GAME_SCENE_NAME and not(buffer_active):
                 self.log_info_norepeat("Starting replay buffer.")
                 self.req.start_replay_buffer()
         except Exception as error:
@@ -463,7 +505,7 @@ class MegaScript:
                     time.sleep(interval) 
                     continue
 
-                if current_scene == "Alt Tabbed":
+                if current_scene == self.AFK_SCENE_NAME:
                     self.req.set_input_settings("Alt Tabbed Text", {
                         "text": f"Alt Tabbed {next(self.emote_gen)}"
                     }, True)
@@ -527,7 +569,6 @@ class MegaScript:
                     return None
 
                 elif event.event_type == 'modified':
-                    print(event)
                     if "commands.json" in event.src_path:
                         commands_path = Path.joinpath(self.script_path, "commands.json")
                         commands_data = None
