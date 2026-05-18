@@ -439,6 +439,7 @@ class MegaScript:
                                 overlay=True
                             )
                         elif current_scene != self.SCENE_DISCORD_NAME and focused_special:
+                            # check to ensure discord is in the obs_window_str of at least 1 entry in the focused special list
                             if any("discord" in window.get("obs_window_str").lower() for window in focused_special):
                                 if len(focused_special) == 1:
                                     chosen_window = focused_special[0]
