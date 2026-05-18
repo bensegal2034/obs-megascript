@@ -91,18 +91,24 @@ class MegaScript:
         self.logger = logging.getLogger("obs-megascript")
         self.logger_last_msg = ""
 
-        self.log_info_norepeat("Script started, connecting to OBS...")
-        self.establish_connection()
-        self.log_info_norepeat("Connected to OBS!")
-
         self.commands_observer = None
         self.commands_event = None
 
         self.instant_replay_requested = False
 
-        self.AFK_SCENE_NAME = "Alt Tabbed"
-        self.GAME_SCENE_NAME = "Game Capture"
-        self.DISCORD_SCENE_NAME = "Discord Capture"
+        self.SCENE_AFK_NAME = "Alt Tabbed"
+        self.SCENE_GAME_NAME = "Game Capture"
+        self.SCENE_DISCORD_NAME = "Discord Capture"
+
+        self.SFX_RECORD_START = str(Path.joinpath(self.script_path, "assets", "recordingstartbeep.mp3"))
+        self.SFX_RECORD_END = str(Path.joinpath(self.script_path, "assets", "recordingendbeep.mp3"))
+        self.SFX_RECORD_ERROR = str(Path.joinpath(self.script_path, "assets", "error.mp3"))
+        self.SFX_COMMAND_RECEIVED = str(Path.joinpath(self.script_path, "assets", "commandreceived.mp3"))
+
+        self.log_info_norepeat("Megascript initialized! Connecting to OBS...")
+        self.establish_connection()
+        self.log_info_norepeat("Connected to OBS!")
+
 
     def log_info_norepeat(self, msg):
         if not msg == self.logger_last_msg:
@@ -156,8 +162,8 @@ class MegaScript:
                 self.switcher_thread.join(timeout=5)
                 self.switcher_thread = None
             
-            if not isinstance(error, obserror):
-                self.logger.error(f"OBS connection failed but error is not an OBS connection error! (Instead instance of {type(error)}!) Reconnecting...")
+            if not isinstance(error, (obserror.OBSSDKError, obserror.OBSSDKRequestError, obserror.OBSSDKTimeoutError)):
+                self.logger.error(f"OBS connection failed but error is not an OBS error! (Instead instance of {type(error)}!) Reconnecting...")
             else:
                 self.logger.error("OBS connection failed, reconnecting...")
             self.establish_connection()
@@ -179,20 +185,14 @@ class MegaScript:
         if data.output_path is not None:
             saved_recording_data = Path(data.output_path)
         if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
-            playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
+            playsound(self.SFX_RECORD_START)
         elif output_state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
             self.handle_saved_file(saved_recording_data)
 
     def on_replay_buffer_saved(self, data):
-        playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
+        playsound(self.SFX_RECORD_START)
         saved_replay = Path(data.saved_replay_path)
         self.handle_saved_file(saved_replay)
-
-    # def on_replay_buffer_state_changed(self, data):
-    #     output_state = data.output_state
-    #     print(output_state)
-    #     if output_state == "OBS_WEBSOCKET_OUTPUT_STOPPING":
-    #         playsound(str(Path.joinpath(self.script_path, "recordingstartbeep.mp3")))
 
     def check_names_against_dir(self, names, directory):
         # this func stolen from here: https://stackoverflow.com/a/5320179
@@ -245,7 +245,7 @@ class MegaScript:
                 "--pause",
                 filepath
             ]
-            playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
+            playsound(self.SFX_RECORD_END)
             subprocess.run(mpv_args)
             try:
                 send2trash(filepath)
@@ -304,9 +304,9 @@ class MegaScript:
 
         if not error:
             self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{nonspecial_names}'.")
-            playsound(str(Path.joinpath(self.script_path, "recordingendbeep.mp3")))
+            playsound(self.SFX_RECORD_END)
         else:
-            playsound(str(Path.joinpath(self.script_path, "error.mp3")))
+            playsound(self.SFX_RECORD_ERROR)
     
     def get_valid_windows(self):
         # a "valid window" is defined by a window that is:
@@ -414,22 +414,22 @@ class MegaScript:
                     chosen_window = None
 
                     if not focused_windows: 
-                        if current_scene != self.AFK_SCENE_NAME:
-                            self.log_info_norepeat(f"Setting scene to {self.AFK_SCENE_NAME}")
-                            self.req.set_current_program_scene(self.AFK_SCENE_NAME)
+                        if current_scene != self.SCENE_AFK_NAME:
+                            self.log_info_norepeat(f"Setting scene to {self.SCENE_AFK_NAME}")
+                            self.req.set_current_program_scene(self.SCENE_AFK_NAME)
                             self.afk_timer = int(time.time()) + self.buffer_timeout
                     else:
                         # check game capture stuff first because we prioritize games over special windows
                         # we only care about the non special focused windows here
-                        if current_scene != self.GAME_SCENE_NAME and focused_notspecial:
+                        if current_scene != self.SCENE_GAME_NAME and focused_notspecial:
                             if len(focused_notspecial) == 1:
                                 chosen_window = focused_notspecial[0]
                             else:
                                 chosen_window = random.choice(focused_notspecial)
                                 self.logger.warning(f"Detected multiple focused nonspecial windows! Selected {chosen_window} to switch to at random.")
 
-                            self.log_info_norepeat(f"Setting scene to {self.GAME_SCENE_NAME}, switching {self.GAME_SCENE_NAME} output to {chosen_window["obs_window_str"]}.")
-                            self.req.set_current_program_scene(self.GAME_SCENE_NAME)
+                            self.log_info_norepeat(f"Setting scene to {self.SCENE_GAME_NAME}, switching {self.SCENE_GAME_NAME} output to {chosen_window["obs_window_str"]}.")
+                            self.req.set_current_program_scene(self.SCENE_GAME_NAME)
                             self.req.set_input_settings(
                                 name="Capture 0", 
                                 settings={
@@ -438,7 +438,7 @@ class MegaScript:
                                 },
                                 overlay=True
                             )
-                        elif current_scene != self.DISCORD_SCENE_NAME and focused_special:
+                        elif current_scene != self.SCENE_DISCORD_NAME and focused_special:
                             if any("discord" in window.get("obs_window_str").lower() for window in focused_special):
                                 if len(focused_special) == 1:
                                     chosen_window = focused_special[0]
@@ -446,8 +446,8 @@ class MegaScript:
                                     chosen_window = random.choice(focused_special)
                                     self.logger.warning(f"Detected multiple focused special windows with 'discord' in their obs_window_str! Selected {chosen_window} to switch to at random.")
                                 
-                            self.log_info_norepeat(f"Setting scene to {self.DISCORD_SCENE_NAME}, switching {self.DISCORD_SCENE_NAME} output to {chosen_window["obs_window_str"]}.")
-                            self.req.set_current_program_scene(self.DISCORD_SCENE_NAME)
+                            self.log_info_norepeat(f"Setting scene to {self.SCENE_DISCORD_NAME}, switching {self.SCENE_DISCORD_NAME} output to {chosen_window["obs_window_str"]}.")
+                            self.req.set_current_program_scene(self.SCENE_DISCORD_NAME)
                             self.req.set_input_settings(
                                 name="Discord Window Capture", 
                                 settings={
@@ -476,11 +476,11 @@ class MegaScript:
             buffer_active = self.req.get_replay_buffer_status().output_active
 
             now = int(time.time())
-            if current_scene == self.AFK_SCENE_NAME and now >= self.afk_timer and buffer_active:
+            if current_scene == self.SCENE_AFK_NAME and now >= self.afk_timer and buffer_active:
                 self.log_info_norepeat(f"Stopping replay buffer, current time '{now}' greater than afk timer '{self.afk_timer}' and replay buffer active.")
                 self.req.stop_replay_buffer()
             
-            elif (current_scene == self.GAME_SCENE_NAME or current_scene == self.DISCORD_SCENE_NAME) and not(buffer_active):
+            elif (current_scene == self.SCENE_GAME_NAME or current_scene == self.SCENE_DISCORD_NAME) and not(buffer_active):
                 self.log_info_norepeat("Starting replay buffer.")
                 self.req.start_replay_buffer()
         except Exception as error:
@@ -505,7 +505,7 @@ class MegaScript:
                     time.sleep(interval) 
                     continue
 
-                if current_scene == self.AFK_SCENE_NAME:
+                if current_scene == self.SCENE_AFK_NAME:
                     self.req.set_input_settings("Alt Tabbed Text", {
                         "text": f"Alt Tabbed {next(self.emote_gen)}"
                     }, True)
@@ -522,7 +522,7 @@ class MegaScript:
                 self.instant_replay_requested = True
                 self.req.save_replay_buffer()
             else:
-                playsound(str(Path.joinpath(self.script_path, "error.mp3")))
+                playsound(self.SFX_RECORD_ERROR)
                 if not buffer_active:
                     self.log_info_norepeat("Cannot show instant replay; replay buffer inactive!")
                 elif self.instant_replay_requested:
@@ -576,13 +576,13 @@ class MegaScript:
                         with open(commands_path, "r") as f:
                             commands_data = json.load(f)
                             if commands_data["toggleSwitcher"]:
-                                playsound(str(Path.joinpath(self.script_path, "commandreceived.mp3")))
+                                playsound(self.SFX_COMMAND_RECEIVED)
                                 self.switcher_active = not(self.switcher_active)
                                 self.log_info_norepeat(f"Toggling switcher to {self.switcher_active}.")
                                 commands_data["toggleSwitcher"] = False
                             
                             if commands_data["instantReplay"]:
-                                playsound(str(Path.joinpath(self.script_path, "commandreceived.mp3")))
+                                playsound(self.SFX_COMMAND_RECEIVED)
                                 self.log_info_norepeat("Attempting to initiate instant replay...")
                                 self.instant_replay()
                                 commands_data["instantReplay"] = False
