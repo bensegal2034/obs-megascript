@@ -480,7 +480,7 @@ class MegaScript:
                 self.log_info_norepeat(f"Stopping replay buffer, current time '{now}' greater than afk timer '{self.afk_timer}' and replay buffer active.")
                 self.req.stop_replay_buffer()
             
-            elif current_scene == self.GAME_SCENE_NAME and not(buffer_active):
+            elif (current_scene == self.GAME_SCENE_NAME or current_scene == self.DISCORD_SCENE_NAME) and not(buffer_active):
                 self.log_info_norepeat("Starting replay buffer.")
                 self.req.start_replay_buffer()
         except Exception as error:
