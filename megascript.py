@@ -259,7 +259,7 @@ class MegaScript:
                     correct_dir = None
                     if focused_windows:
                         # no need to sort through these further, should only have 1 focused window
-                        # send that off to be checked against recording dirs
+                        # send that off to be checked against recording dirs5
                         focused_names = [window.get("obs_window_str") for window in focused_windows]
                         dir, name = self.check_names_against_dir(focused_names, recording_dir)
                         correct_dir = dir
@@ -310,6 +310,17 @@ class MegaScript:
 
         # list is here to determine any windows that we should ALWAYS return in the list
         # regardless of if they are fullscreen or not
+
+        # TODO: valorant currently sets its window rect to -32000 -32000 -31000 -31000 when it is alt tabbed.
+        # this breaks this code because i assume windows will be at their normal pos and width/height even if they are not focused.
+        # therefore need to find better way of doing this.
+        # currently, best idea i have is to implement a "priority" system for special windows
+        # set discord to lowest priority and valorant to highest priority
+        # then in switcher and handle_saved_file, go through special windows in order of priority
+        # this would probably fix it but it is a bit of a bandaid fix
+        # best possible thing would be to find a magical "fullscreen" flag that is true when a window is fullscreen, false when it isnt
+        # but dont know if this exists within windows
+        
         special_nongame_windows = [
             "discord"
         ]
