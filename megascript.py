@@ -234,7 +234,6 @@ class MegaScript:
     
     def handle_saved_file(self, filepath):
         recording_dir = filepath.parents[0]
-        error = False
         moved = False
         valid_windows = self.get_valid_windows()
 
@@ -291,22 +290,18 @@ class MegaScript:
                     shutil.move(filepath, correct_dir)
                     moved = True
                 else:
-                    error = True
                     self.logger.error(f"Error moving '{filepath}'. No application was detected as valid.")
 
             except Exception as error:
-                error = True
+                playsound(self.SFX_RECORD_ERROR)
                 self.logger.exception(error)
                 if moved:
                     self.logger.error(f"Error moving '{filepath}'. File was moved from original location to '{correct_dir}'.")
                 else:
                     self.logger.error(f"Error moving '{filepath}'. File was NOT moved from original location.")
 
-        if not error:
-            self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'. Valid names considered: '{nonspecial_names}'.")
+            self.log_info_norepeat(f"Succesfully saved original file '{filepath}' at '{correct_dir}'.")
             playsound(self.SFX_RECORD_END)
-        else:
-            playsound(self.SFX_RECORD_ERROR)
     
     def get_valid_windows(self):
         # a "valid window" is defined by a window that is:
@@ -337,7 +332,7 @@ class MegaScript:
             # this means the window has the visible bit set. 
             # this check is here to filter out weird windows that we don't care about
             if win32gui.IsWindowVisible(hWnd):
-                # setup all of our info about the window
+                # setup the data we care about for our window
                 rect = win32gui.GetWindowRect(hWnd)
                 window_name = win32gui.GetWindowText(hWnd)
                 tid, pid = win32process.GetWindowThreadProcessId(hWnd) # first var is thread id, second var is process id
@@ -346,10 +341,11 @@ class MegaScript:
                 class_name = win32gui.GetClassName(hWnd)
                 obs_window_str = f"{window_name}:{class_name}:{exe_name}"
                 special_app = any(window_name.lower() in obs_window_str.lower() for window_name in special_nongame_windows)
-                focused = hWnd == win32gui.GetForegroundWindow()
                 fullscreen = is_hWnd_fullscreen(rect, full_screen_rect)
 
                 if fullscreen or special_app:
+                    focused = hWnd == win32gui.GetForegroundWindow()
+
                     if window_name != "":
                         window_info_dict = {}
                         window_str_safe = True
@@ -396,10 +392,10 @@ class MegaScript:
 
             try:
                 current_scene_data = self.req.get_current_program_scene()
-                current_scene = current_scene_data.scene_name
                 if current_scene_data is None:
                     time.sleep(interval) 
                     continue
+                current_scene = current_scene_data.scene_name
 
                 valid_windows = self.get_valid_windows()
                 
@@ -407,10 +403,6 @@ class MegaScript:
                     # first obtain list of all focused windows
                     # this SHOULD be only one window, but you never know
                     focused_windows = [window for window in valid_windows.values() if window.get("focused")]
-                    # separate them out further into lists for special and non special focused windows
-                    focused_special = [window for window in focused_windows if window.get("special_app")]
-                    focused_notspecial = [window for window in focused_windows if not window.get("special_app")]
-                    #self.log_info_norepeat(f"Found valid windows! Focused windows var dump: \nfocused_windows: {focused_windows}\nfocused_special: {focused_special}\nfocused_notspecial:{focused_notspecial}")
                     chosen_window = None
 
                     if not focused_windows: 
@@ -419,6 +411,9 @@ class MegaScript:
                             self.req.set_current_program_scene(self.SCENE_AFK_NAME)
                             self.afk_timer = int(time.time()) + self.buffer_timeout
                     else:
+                        # separate focused windows out further into lists for special and non special focused windows
+                        focused_special = [window for window in focused_windows if window.get("special_app")]
+                        focused_notspecial = [window for window in focused_windows if not window.get("special_app")]
                         # check game capture stuff first because we prioritize games over special windows
                         # we only care about the non special focused windows here
                         if current_scene != self.SCENE_GAME_NAME and focused_notspecial:
@@ -471,9 +466,9 @@ class MegaScript:
     def manage_buffer_state(self):
         try:
             current_scene_data = self.req.get_current_program_scene()
-            current_scene = current_scene_data.scene_name
             if current_scene_data is None:
                 return
+            current_scene = current_scene_data.scene_name
             buffer_active = self.req.get_replay_buffer_status().output_active
 
             now = int(time.time())
@@ -501,10 +496,10 @@ class MegaScript:
         while self.running:
             try:
                 current_scene_data = self.req.get_current_program_scene()
-                current_scene = current_scene_data.scene_name
                 if current_scene_data is None:
                     time.sleep(interval) 
                     continue
+                current_scene = current_scene_data.scene_name
 
                 if current_scene == self.SCENE_AFK_NAME:
                     self.req.set_input_settings("Alt Tabbed Text", {
